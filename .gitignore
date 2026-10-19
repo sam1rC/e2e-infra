@@ -1,0 +1,19 @@
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.json
+crash*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.secret.tfvars
+.env
+.env.*
+.terraformrc
+terraform.rc
+.DS_Store
+# Los lock files de live/ SÍ se versionan; los de los módulos vendorizados no.
+modules/**/.terraform.lock.hcl
+blueprints/**/.terraform.lock.hcl
