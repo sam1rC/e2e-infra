@@ -1,0 +1,11 @@
+# Generado por scripts/new-client.sh (plan, fase 11): los cambios en producción, identidad de CI, organización,
+# políticas y catálogo vendorizado necesitan la revisión de sus responsables (protección de main en
+# scripts/github-setup.sh).
+/live/prod/        @sam1rC
+/live/_bootstrap/  @sam1rC
+/live/_baseline/   @sam1rC
+/.github/          @sam1rC
+/policies/         @sam1rC
+/modules/          @sam1rC
+/blueprints/       @sam1rC
+/CATALOG_VERSION   @sam1rC

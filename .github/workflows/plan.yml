@@ -1,0 +1,121 @@
+# Plan de las raíces de live/ que cambia un PR (plan, fase 11.1; ADR 0018). Comenta el plan, las políticas y el
+# coste en el PR. El check obligatorio de la rama main es "plan-result".
+name: plan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      roots: ${{ steps.changes.outputs.roots }}
+      matrix: ${{ steps.changes.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Raíces afectadas
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: scripts/changed-roots.sh "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
+
+  # Análisis estático de todo live/ (y de los módulos que usa) una sola vez por PR.
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Versiones de .tool-versions
+        id: versions
+        run: awk 'NF == 2 { gsub("-", "_", $1); print $1 "=" $2 }' .tool-versions >> "$GITHUB_OUTPUT"
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ steps.versions.outputs.opentofu }}
+          tofu_wrapper: false
+
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: v${{ steps.versions.outputs.tflint }}
+
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v${{ steps.versions.outputs.trivy }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: fmt
+        run: tofu fmt -check -recursive -diff live
+
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # tflint --init descarga el plugin de AWS desde GitHub (límite de peticiones)
+        run: |
+          tflint --init --config="$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --chdir=live --config="$GITHUB_WORKSPACE/.tflint.hcl"
+
+      - name: trivy
+        run: trivy config --severity HIGH,CRITICAL --exit-code 1 --skip-dirs '**/.terraform' live
+
+      - name: checkov
+        env:
+          CHECKOV_VERSION: ${{ steps.versions.outputs.checkov }}
+        run: |
+          pip install --no-cache-dir "checkov==${CHECKOV_VERSION}"
+          checkov --config-file .checkov.yaml -d live
+
+  plan:
+    needs: changes
+    if: needs.changes.outputs.roots != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
+    uses: ./.github/workflows/tofu-layer.yml
+    with:
+      root: ${{ matrix.root }}
+      mode: plan
+      region: ${{ matrix.region }}
+      plan_role_arn: ${{ matrix.plan_role_arn }}
+      apply_role_arn: ${{ matrix.apply_role_arn }}
+      github_environment: ${{ matrix.github_environment }}
+      allow_destroy: ${{ contains(github.event.pull_request.labels.*.name, 'allow-destroy') }}
+      pr_number: ${{ github.event.pull_request.number }}
+    secrets: inherit
+
+  # Check único para la protección de rama (los nombres de la matriz cambian en cada PR).
+  plan-result:
+    needs: [changes, static, plan]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Resultado
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "resultados: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) echo "::error::algún job del plan terminó en $r"; exit 1 ;; esac
+          done

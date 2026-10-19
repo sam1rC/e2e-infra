@@ -1,0 +1,299 @@
+# Workflow reutilizable: plan (y apply del MISMO plan) de una raíz de live/ (plan, fase 11; ADR 0018).
+# Lo llaman plan.yml (PR), apply.yml (push a main), drift.yml (cron) y silo-deploy.yml. Los permisos los fija
+# quien llama: id-token: write siempre; pull-requests: write para comentar el PR; issues: write para el drift.
+name: tofu-layer
+
+on:
+  workflow_call:
+    inputs:
+      root:
+        description: Raíz relativa a live/ (p. ej. dev/network).
+        type: string
+        required: true
+      mode:
+        description: plan (PR, comenta el resultado), apply (plan + apply del plan revisado) o drift (abre/cierra un issue).
+        type: string
+        required: true
+      region:
+        description: Región de la cuenta de la raíz.
+        type: string
+        required: true
+      plan_role_arn:
+        description: Rol de solo lectura + estado (gha-plan-<env>, salida de live/_bootstrap).
+        type: string
+        required: true
+      apply_role_arn:
+        description: Rol de despliegue (gha-apply-<env>); solo lo puede asumir un job del GitHub Environment.
+        type: string
+        required: true
+      github_environment:
+        description: GitHub Environment que autoriza el apply (en prod, con revisores obligatorios).
+        type: string
+        required: true
+      allow_destroy:
+        description: Etiqueta allow-destroy del PR (desactiva la política de destrucción de recursos con estado).
+        type: boolean
+        default: false
+      pr_number:
+        description: Número del PR donde se comenta el plan (0 = sin comentario).
+        type: number
+        default: 0
+    secrets:
+      INFRACOST_API_KEY:
+        description: Clave de Infracost (opcional; sin ella no hay estimación de costes).
+        required: false
+    outputs:
+      changes:
+        description: true si el plan tenía cambios.
+        value: ${{ jobs.plan.outputs.changes }}
+
+env:
+  ROOT: ${{ inputs.root }}
+  ROOT_DIR: live/${{ inputs.root }}
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+  TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.plugin-cache
+
+jobs:
+  plan:
+    name: plan ${{ inputs.root }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Un solo plan/apply/drift a la vez por raíz (los planes de PR no esperan: el lock del estado ya serializa).
+    concurrency:
+      group: ${{ inputs.mode == 'plan' && format('plan-{0}-{1}', inputs.root, github.run_id) || format('state-{0}', inputs.root) }}
+      cancel-in-progress: false
+    outputs:
+      changes: ${{ steps.plan.outputs.changes }}
+    env:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Versiones de .tool-versions
+        id: versions
+        run: awk 'NF == 2 { gsub("-", "_", $1); print $1 "=" $2 }' .tool-versions >> "$GITHUB_OUTPUT"
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ steps.versions.outputs.opentofu }}
+          tofu_wrapper: false
+
+      - name: Caché de providers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .plugin-cache
+          key: tofu-plugins-${{ runner.os }}-${{ hashFiles(format('{0}/.terraform.lock.hcl', env.ROOT_DIR)) }}
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.plan_role_arn }}
+          role-session-name: plan-${{ github.run_id }}
+          aws-region: ${{ inputs.region }}
+
+      - name: init, fmt y validate
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          tofu -chdir="$ROOT_DIR" init -lockfile=readonly -no-color
+          tofu -chdir="$ROOT_DIR" fmt -check -recursive -no-color
+          tofu -chdir="$ROOT_DIR" validate -no-color
+
+      - name: plan
+        id: plan
+        run: |
+          set +e
+          tofu -chdir="$ROOT_DIR" plan -lock-timeout=10m -detailed-exitcode -no-color -out=plan.tfplan
+          code=$?
+          set -e
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          echo "changes=$([ "$code" -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          # El fichero de plan va cifrado por el bloque encryption; el texto y el JSON solo viven en el runner.
+          tofu -chdir="$ROOT_DIR" show -no-color plan.tfplan > "$RUNNER_TEMP/plan.txt"
+          tofu -chdir="$ROOT_DIR" show -json plan.tfplan > "$RUNNER_TEMP/plan.json"
+
+      - name: Políticas (conftest)
+        id: conftest
+        continue-on-error: true
+        env:
+          CONFTEST_VERSION: ${{ steps.versions.outputs.conftest }}
+          ALLOW_DESTROY: ${{ inputs.allow_destroy }}
+        run: |
+          cd "$RUNNER_TEMP"
+          base="https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}"
+          asset="conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          curl -sSLO "$base/$asset"
+          curl -sSL -o conftest_checksums.txt "$base/checksums.txt"
+          grep " ${asset}\$" conftest_checksums.txt | sha256sum -c -
+          tar -xzf "$asset" conftest
+          printf '{"allow_destroy": %s}\n' "$ALLOW_DESTROY" > conftest-data.json
+          ./conftest test plan.json -p "$GITHUB_WORKSPACE/policies/opa" --data conftest-data.json --no-color | tee conftest.txt
+
+      - name: Infracost
+        if: inputs.mode == 'plan' && env.INFRACOST_API_KEY != ''
+        uses: infracost/actions/setup@a5783eb98adc93aa7a0049fce0abb06fdd30770a # v5.0.1
+        with:
+          api-key: ${{ env.INFRACOST_API_KEY }}
+          version: ${{ steps.versions.outputs.infracost }}
+
+      - name: Estimación de costes
+        if: inputs.mode == 'plan' && env.INFRACOST_API_KEY != ''
+        continue-on-error: true
+        run: infracost breakdown --path "$RUNNER_TEMP/plan.json" --format table --no-color > "$RUNNER_TEMP/infracost.txt"
+
+      - name: Resumen del job
+        if: always() && steps.plan.outcome == 'success'
+        env:
+          CHANGES: ${{ steps.plan.outputs.changes }}
+          CONFTEST: ${{ steps.conftest.outcome }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          {
+            echo "### \`$ROOT_DIR\` ($MODE)"
+            echo "Cambios: **$CHANGES** · Políticas: **$CONFTEST**"
+            echo '```'
+            grep -E '^(Plan:|No changes\.|Changes to Outputs)' "$RUNNER_TEMP/plan.txt" || true
+            echo '```'
+            echo '<details><summary>Plan</summary>'
+            echo
+            echo '```'
+            head -c 60000 "$RUNNER_TEMP/plan.txt"
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comentario en el PR
+        if: always() && inputs.mode == 'plan' && inputs.pr_number > 0 && steps.plan.outcome == 'success'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CHANGES: ${{ steps.plan.outputs.changes }}
+          CONFTEST: ${{ steps.conftest.outcome }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const read = (f) => { try { return fs.readFileSync(`${process.env.RUNNER_TEMP}/${f}`, 'utf8'); } catch { return ''; } };
+            const root = process.env.ROOT;
+            const marker = `<!-- tofu-plan:${root} -->`;
+            const plan = read('plan.txt');
+            const summary = (plan.match(/^(Plan:.*|No changes\..*)$/m) || ['(sin resumen)'])[0];
+            const max = 50000;
+            const body = [
+              marker,
+              `### \`live/${root}\` ${process.env.CONFTEST === 'success' ? '✅' : '❌ políticas'}`,
+              `**${summary}**`,
+              process.env.CONFTEST === 'success' ? '' : '```\n' + read('conftest.txt').slice(0, 5000) + '\n```',
+              read('infracost.txt') ? '<details><summary>Coste (Infracost)</summary>\n\n```\n' + read('infracost.txt').slice(0, 10000) + '\n```\n</details>' : '',
+              '<details><summary>Plan</summary>\n\n```\n' + plan.slice(0, max) + (plan.length > max ? '\n… (truncado: ver el resumen del job)' : '') + '\n```\n</details>',
+              `<sub>${context.workflow} · ejecución ${context.runId}</sub>`,
+            ].filter(Boolean).join('\n\n');
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number });
+            const existing = comments.find((c) => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number, body });
+            }
+
+      - name: Issue de drift
+        if: inputs.mode == 'drift' && steps.plan.outcome == 'success'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CHANGES: ${{ steps.plan.outputs.changes }}
+        with:
+          script: |
+            const fs = require('fs');
+            const root = process.env.ROOT;
+            const title = `Drift detectado: live/${root}`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const open = await github.paginate(github.rest.issues.listForRepo, { ...context.repo, state: 'open', labels: 'drift' });
+            const existing = open.find((i) => i.title === title);
+            if (process.env.CHANGES === 'true') {
+              const plan = fs.readFileSync(`${process.env.RUNNER_TEMP}/plan.txt`, 'utf8');
+              const body = `La infraestructura real de \`live/${root}\` no coincide con el código (${runUrl}).\n\n` +
+                'Revisa el plan: si el cambio manual es correcto, llévalo al código en un PR; si no, aplica main de nuevo.\n\n' +
+                '<details><summary>Plan</summary>\n\n```\n' + plan.slice(0, 60000) + '\n```\n</details>';
+              if (existing) {
+                await github.rest.issues.update({ ...context.repo, issue_number: existing.number, body });
+              } else {
+                await github.rest.issues.create({ ...context.repo, title, body, labels: ['drift'] });
+              }
+            } else if (existing) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: existing.number, body: `Sin drift en ${runUrl}: se cierra.` });
+              await github.rest.issues.update({ ...context.repo, issue_number: existing.number, state: 'closed' });
+            }
+
+      - name: Nombre del artefacto
+        id: artifact
+        if: inputs.mode == 'apply' && steps.plan.outputs.changes == 'true'
+        run: echo "name=plan-$(printf '%s' "$ROOT" | tr '/' '_')" >> "$GITHUB_OUTPUT"
+
+      # Solo el plan cifrado (nunca el texto ni el JSON) y durante un día: el apply aplica exactamente este plan.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.mode == 'apply' && steps.plan.outputs.changes == 'true' && steps.conftest.outcome == 'success'
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ env.ROOT_DIR }}/plan.tfplan
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Resultado de las políticas
+        if: steps.conftest.outcome == 'failure'
+        run: |
+          echo "::error::El plan de $ROOT_DIR incumple las políticas de policies/opa (ver el resumen)."
+          exit 1
+
+  apply:
+    name: apply ${{ inputs.root }}
+    needs: plan
+    if: inputs.mode == 'apply' && needs.plan.outputs.changes == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # En prod, el GitHub Environment exige la aprobación de un revisor; el rol de apply solo confía en él.
+    environment: ${{ inputs.github_environment }}
+    concurrency:
+      group: state-${{ inputs.root }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Versiones de .tool-versions
+        id: versions
+        run: awk 'NF == 2 { gsub("-", "_", $1); print $1 "=" $2 }' .tool-versions >> "$GITHUB_OUTPUT"
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ steps.versions.outputs.opentofu }}
+          tofu_wrapper: false
+
+      - name: Caché de providers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .plugin-cache
+          key: tofu-plugins-${{ runner.os }}-${{ hashFiles(format('{0}/.terraform.lock.hcl', env.ROOT_DIR)) }}
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.apply_role_arn }}
+          role-session-name: apply-${{ github.run_id }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Nombre del artefacto
+        id: artifact
+        run: echo "name=plan-$(printf '%s' "$ROOT" | tr '/' '_')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ env.ROOT_DIR }}
+
+      # Si el estado cambió desde el plan, OpenTofu rechaza el plan obsoleto: hay que relanzar (comportamiento buscado).
+      - name: apply del plan revisado
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          tofu -chdir="$ROOT_DIR" init -lockfile=readonly -no-color
+          tofu -chdir="$ROOT_DIR" apply -lock-timeout=10m -no-color plan.tfplan
