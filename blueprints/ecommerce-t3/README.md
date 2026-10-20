@@ -40,7 +40,7 @@ Las capas derivan de `environment` lo que el plan fija por entorno (cada valor s
 - Etiquetas obligatorias por `default_tags` del provider en `live/` (no dentro de las capas).
 - El token `x-origin-verify` (ADR 0010) se rota subiendo `origin_verify_version`: la Lambda acepta el valor actual y el anterior.
 - El plan flat-rate de CloudFront (`waf_mode = "flat_rate"`) se contrata en la consola: paso manual del runbook.
-- `spa_error_codes` reescribe también los 403/404 de `/api/*` como `index.html`: vacíalo si el frontend no es una SPA.
+- El enrutado de la SPA lo hace una CloudFront Function (rutas sin extensión → `/index.html`); los errores del WAF y de `/api/*` llegan tal cual. `spa_error_codes` (reescritura de errores de toda la distribución) queda vacío por defecto.
 
 ## Pruebas
 

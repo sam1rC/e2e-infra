@@ -246,3 +246,17 @@ run "rejects_wildcards_in_subject_prefix" {
 
   expect_failures = [var.github_subject_prefix]
 }
+
+run "plan_role_decrypts_only_via_lambda" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for s in data.aws_iam_policy_document.plan_read_encrypted_config.statement :
+      toset(s.actions) == toset(["kms:Decrypt"]) && anytrue([
+        for c in s.condition : c.variable == "kms:ViaService" && toset(c.values) == toset(["lambda.*.amazonaws.com"])
+      ])
+    ])
+    error_message = "El rol de plan solo puede descifrar a través de Lambda (variables de entorno cifradas)."
+  }
+}

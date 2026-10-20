@@ -87,9 +87,9 @@ variable "content_security_policy" {
 }
 
 variable "spa_error_codes" {
-  description = "Errores del origen que se sirven como /index.html (enrutado de la SPA). Afecta también a /api/*: un 403/404 de la API llega como index.html. Lista vacía para desactivarlo."
+  description = "Errores que se sirven como /index.html con 200. Desaconsejado (por defecto ninguno): el enrutado de la SPA lo hace una CloudFront Function, y esta reescritura convertiría en 200 los bloqueos del WAF y los 403/404 de /api/*."
   type        = list(number)
-  default     = [403, 404]
+  default     = []
   nullable    = false
 }
 

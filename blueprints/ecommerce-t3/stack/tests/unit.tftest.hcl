@@ -3,6 +3,9 @@
 # módulo ya la prueban sus propios tests.
 
 mock_provider "aws" {
+  mock_resource "aws_cloudfront_function" {
+    defaults = { arn = "arn:aws:cloudfront::123456789012:function/acme-dev-spa-routing" }
+  }
   mock_data "aws_caller_identity" {
     defaults = { account_id = "123456789012" }
   }
@@ -86,6 +89,9 @@ mock_provider "aws" {
 mock_provider "aws" {
   alias = "us_east_1"
 
+  mock_resource "aws_cloudfront_function" {
+    defaults = { arn = "arn:aws:cloudfront::123456789012:function/acme-dev-spa-routing" }
+  }
   mock_data "aws_caller_identity" {
     defaults = { account_id = "123456789012" }
   }

@@ -53,6 +53,7 @@ No modules.
 | [aws_iam_policy.state_access](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy) | resource |
 | [aws_iam_role.apply](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role.plan](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy.plan_read_encrypted_config](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_iam_role_policy_attachment.apply_managed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
 | [aws_iam_role_policy_attachment.apply_state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
 | [aws_iam_role_policy_attachment.plan_managed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
@@ -61,6 +62,7 @@ No modules.
 | [aws_iam_openid_connect_provider.existing](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_openid_connect_provider) | data source |
 | [aws_iam_policy_document.apply_boundary](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.apply_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.plan_read_encrypted_config](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.plan_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.state_access](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
@@ -96,6 +98,8 @@ No modules.
 
 ## Decisiones de seguridad
 
+- El rol de plan añade a `ReadOnlyAccess` un único permiso: `kms:Decrypt` sobre claves de la cuenta **solo vía Lambda** (`kms:ViaService = lambda.*.amazonaws.com`). Sin él, Lambda devuelve vacías las variables de entorno cifradas con CMK y cada plan (y el drift diario) mostraba un cambio falso (E2E del 2026-10-19). Las variables de entorno no contienen secretos (regla 0.1).
+- `github_subject_prefix` admite el `sub` inmutable de los repositorios nuevos de GitHub (`repo:<org>@<id>/<repo>@<id>`), que además impide que un repositorio recreado con el mismo nombre herede la confianza.
 - Las trust policies exigen `aud = sts.amazonaws.com` y comparan `sub` con `StringEquals` (nunca `StringLike`); los inputs `github_org`/`github_repo` se validan contra comodines.
 - El rol de apply no puede asumirse desde una rama ni un pull request, aunque se modifique el workflow: el `sub` solo existe en jobs que despliegan al GitHub Environment. **Configura en GitHub las reglas del Environment** (revisores obligatorios en `prod` y restricción de ramas desplegables a `main`); sin ellas, cualquier rama podría declarar `environment: prod`.
 - La *permission boundary* del rol de apply (techo de permisos) deniega:
