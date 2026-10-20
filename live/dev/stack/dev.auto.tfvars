@@ -1,7 +1,7 @@
 # Valores comunes generados desde client.yaml por scripts/new-client.sh (sin secretos).
 account_id          = "654654616677"
 region              = "us-east-1"
-project             = "e2e"
+project             = "e2ex"
 environment         = "dev"
 blueprint           = "saas-t3"
 owner               = "samir"
