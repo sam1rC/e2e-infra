@@ -125,6 +125,30 @@ resource "aws_iam_role_policy_attachment" "plan_state" {
   policy_arn = aws_iam_policy.state_access.arn
 }
 
+# ReadOnlyAccess no incluye kms:Decrypt: Lambda devuelve sus variables de entorno vacías al rol de plan cuando están
+# cifradas con una CMK, y cada plan (y el detector de drift) vería un cambio falso. Solo a través de Lambda y solo
+# claves de esta cuenta; las variables de entorno nunca llevan secretos (regla 0.1). E2E de la fase 12, 2026-10-19.
+data "aws_iam_policy_document" "plan_read_encrypted_config" {
+  statement {
+    sid       = "ReadLambdaEnvironmentViaLambda"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = ["arn:${local.partition}:kms:*:${local.account_id}:key/*"]
+
+    condition {
+      test     = "StringLike"
+      variable = "kms:ViaService"
+      values   = ["lambda.*.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "plan_read_encrypted_config" {
+  name   = "read-encrypted-config"
+  role   = aws_iam_role.plan.id
+  policy = data.aws_iam_policy_document.plan_read_encrypted_config.json
+}
+
 # --- Permission boundary del rol de apply ----------------------------------------------------
 
 data "aws_iam_policy_document" "apply_boundary" {
