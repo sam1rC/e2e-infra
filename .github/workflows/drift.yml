@@ -16,6 +16,12 @@ concurrency:
   group: drift
   cancel-in-progress: false
 
+# shell: bash = "bash --noprofile --norc -eo pipefail": sin él GitHub usa "bash -e" y un fallo dentro de una
+# tubería (conftest | tee) no detiene el paso (E2E de la fase 12).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   roots:
     runs-on: ubuntu-24.04
