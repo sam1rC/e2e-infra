@@ -46,6 +46,17 @@ variable "github_repo" {
   nullable = false
 }
 
+variable "github_subject_prefix" {
+  description = "Prefijo del claim sub del token OIDC de GitHub tal como lo emite el repositorio: sub_claim_prefix de `gh api repos/<org>/<repo>/actions/oidc/customization/sub`. Los repositorios nuevos usan el formato inmutable repo:<org>@<id>/<repo>@<id> (resiste renombrados y recreaciones del repositorio). null = formato clásico repo:<github_org>/<github_repo>."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.github_subject_prefix == null || can(regex("^repo:[A-Za-z0-9-]+(@[0-9]+)?/[A-Za-z0-9._-]+(@[0-9]+)?$", coalesce(var.github_subject_prefix, "x")))
+    error_message = "github_subject_prefix debe ser repo:<org>/<repo> o repo:<org>@<id>/<repo>@<id>, sin comodines."
+  }
+}
+
 variable "github_environment" {
   description = "Nombre del GitHub Environment que autoriza el apply. Si es null se usa el valor de environment."
   type        = string

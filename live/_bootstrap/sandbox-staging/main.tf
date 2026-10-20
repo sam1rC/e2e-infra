@@ -17,10 +17,11 @@ module "github_oidc" {
   project     = var.project
   environment = var.environment
 
-  github_org         = var.github_org
-  github_repo        = var.github_repo
-  github_environment = var.github_environment
-  create_provider    = var.create_oidc_provider
+  github_org            = var.github_org
+  github_repo           = var.github_repo
+  github_environment    = var.github_environment
+  github_subject_prefix = var.github_subject_prefix
+  create_provider       = var.create_oidc_provider
 
   state_bucket_arn  = module.state_backend.bucket_arn
   state_kms_key_arn = module.state_backend.kms_key_arn

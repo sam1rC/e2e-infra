@@ -111,6 +111,12 @@ variable "github_repo" {
   nullable    = false
 }
 
+variable "github_subject_prefix" {
+  description = "Prefijo del claim sub de OIDC del repositorio (sub_claim_prefix de `gh api repos/<org>/<repo>/actions/oidc/customization/sub`); los repositorios nuevos usan repo:<org>@<id>/<repo>@<id>. null = repo:<org>/<repo>."
+  type        = string
+  default     = null
+}
+
 variable "github_environment" {
   description = "GitHub Environment que autoriza el apply en esta cuenta (en prod, con revisores obligatorios)."
   type        = string

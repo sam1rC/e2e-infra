@@ -9,6 +9,7 @@ size: small
 github:
   org: sam1rC
   repo: e2e-infra
+  subject_prefix: "repo:sam1rC@71835312/e2e-infra@1426300729"
   codeowners: ["@sam1rC"]
 
 tags:

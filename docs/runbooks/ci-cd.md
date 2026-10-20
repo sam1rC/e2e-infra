@@ -54,8 +54,11 @@ pasa por un PR; nadie aplica desde su portátil salvo el bootstrap y los casos *
 
 ## Problemas frecuentes
 
-- `Not authorized to perform sts:AssumeRoleWithWebIdentity`: el job de apply no está en el GitHub Environment que
-  espera el rol (o el environment no existe), o el plan se lanzó desde una rama distinta de `main`/PR.
+- `Not authorized to perform sts:AssumeRoleWithWebIdentity`: el subject del token no coincide con la trust policy.
+  Mira el `userName` del evento fallido en el historial de CloudTrail (`aws cloudtrail lookup-events
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity`): si es
+  `repo:<org>@<id>/<repo>@<id>:...`, fija `github_subject_prefix` en el bootstrap (runbook `bootstrap`, paso 0). Si no,
+  el job de apply no está en el GitHub Environment que espera el rol o el plan se lanzó desde otra rama.
 - `the lock file ... does not contain hashes for linux_amd64`: regenera los locks con `scripts/lock-providers.sh live`.
 - `Error acquiring the state lock`: otra ejecución tiene el lock; espera (`-lock-timeout=10m`). Si quedó huérfano,
   `tofu force-unlock <ID>` con credenciales de administrador.

@@ -8,6 +8,15 @@ Se ejecuta **una vez por cuenta/entorno**, con credenciales de administrador (hu
 
 ## Pasos
 
+0. **Subject de OIDC del repositorio.** Los repositorios nuevos de GitHub emiten un `sub` inmutable con los IDs del
+   propietario y del repositorio (`repo:<org>@<id>/<repo>@<id>:...`). Crea el repositorio antes del bootstrap y
+   copia su prefijo a `client.yaml` (`github.subject_prefix`, o `github_subject_prefix` en el `*.auto.tfvars`):
+   ```bash
+   gh api repos/<org>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix
+   ```
+   Sin él, los roles confían en `repo:<org>/<repo>` y GitHub Actions recibe `Not authorized to perform
+   sts:AssumeRoleWithWebIdentity` (encontrado en el E2E del 2026-10-19).
+
 1. **Aplicar con estado local.** En `live/_bootstrap/<cuenta>[-<env>]/` (generado por `scripts/new-client.sh`: `state-backend`, `github-oidc` y, en T3 y en el control plane de SaaS T1, el bucket de artefactos de Lambda; sin `backend.tf`):
    ```bash
    tofu init
@@ -16,19 +25,26 @@ Se ejecuta **una vez por cuenta/entorno**, con credenciales de administrador (hu
    Anota los outputs `backend_config`, `plan_role_arn` y `apply_role_arn`.
    Si la cuenta ya tiene el proveedor OIDC de GitHub, pon `create_oidc_provider = false` (el generador ya lo hace en el segundo entorno de una cuenta compartida).
 
-2. **Migrar el estado al bucket.** Renombra el `backend.tf.migrate` generado a `backend.tf` (es el mismo bloque que el output `backend_config` con `<layer>` = `bootstrap`; compruébalo) y ejecuta:
+2. **Migrar el estado al bucket.** `backend.tf.migrate` es el backend definitivo más un método `unencrypted` como
+   `fallback` y `enforced = false`: sin él, OpenTofu no puede leer el estado local sin cifrar para subirlo
+   (`encountered unencrypted payload without unencrypted method configured`; y con `enforced = true` rechaza el método
+   `unencrypted`). Comprobado en la sandbox el 2026-10-19:
    ```bash
-   tofu init -migrate-state
+   cp backend.tf.migrate backend.tf
+   tofu init -migrate-state -force-copy
    ```
-   Responde `yes` a la copia del estado local. El bloque `encryption` cifrará el estado antes de subirlo.
+   El estado se sube ya cifrado con la CMK de estado.
 
-3. **Verificar que el estado remoto está cifrado.**
+3. **Configuración definitiva y verificación.**
    ```bash
-   aws s3 cp s3://<bucket>/<env>/bootstrap/terraform.tfstate - | head -c 300
+   mv backend.tf.final backend.tf && rm backend.tf.migrate
+   tofu init && tofu plan -detailed-exitcode        # exit 0: lee el estado cifrado, sin cambios
+   aws s3 cp s3://<bucket>/<env>/bootstrap/terraform.tfstate - | jq 'keys'
    ```
-   No debe ser JSON legible (OpenTofu lo cifra con AES-GCM antes de subirlo). Comprueba además `aws s3api head-object` → `ServerSideEncryption: aws:kms`.
+   El objeto solo debe tener `encrypted_data`, `encryption_version`, `lineage`, `meta` y `serial` (sin `resources`).
+   `aws s3api head-object` debe mostrar además `ServerSideEncryption: aws:kms` con la CMK de estado.
 
-4. **Borrar el estado local.**
+4. **Borrar el estado local** (`terraform.tfstate` y `.backup` en claro: no lo subas al repositorio).
    ```bash
    rm -f terraform.tfstate terraform.tfstate.backup && rm -rf .terraform
    ```

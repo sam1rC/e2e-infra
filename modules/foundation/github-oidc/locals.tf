@@ -5,6 +5,9 @@ locals {
 
   github_environment = coalesce(var.github_environment, var.environment)
   repo_slug          = "${var.github_org}/${var.github_repo}"
+  # Prefijo del claim sub: el inmutable (owner@id/repo@id, por defecto en los repositorios nuevos de GitHub) o el
+  # clásico repo:<org>/<repo>.
+  subject_prefix = coalesce(var.github_subject_prefix, "repo:${local.repo_slug}")
 
   plan_role_name       = "${var.name_prefix}-plan-${var.environment}"
   apply_role_name      = "${var.name_prefix}-apply-${var.environment}"
@@ -22,8 +25,8 @@ locals {
   state_prefix = "${var.environment}/"
 
   plan_subjects = [
-    "repo:${local.repo_slug}:pull_request",
-    "repo:${local.repo_slug}:ref:refs/heads/${var.main_branch}",
+    "${local.subject_prefix}:pull_request",
+    "${local.subject_prefix}:ref:refs/heads/${var.main_branch}",
   ]
-  apply_subjects = ["repo:${local.repo_slug}:environment:${local.github_environment}"]
+  apply_subjects = ["${local.subject_prefix}:environment:${local.github_environment}"]
 }

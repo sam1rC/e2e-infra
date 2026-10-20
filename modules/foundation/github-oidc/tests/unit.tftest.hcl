@@ -207,3 +207,42 @@ run "rejects_key_alias_instead_of_arn" {
 
   expect_failures = [var.state_kms_key_arn]
 }
+
+run "immutable_subject_prefix_is_used_in_both_roles" {
+  command = plan
+
+  variables {
+    github_subject_prefix = "repo:acme-corp@71835312/acme-infra@1426300729"
+  }
+
+  assert {
+    condition = toset(flatten([
+      for s in data.aws_iam_policy_document.plan_trust.statement : [
+        for c in s.condition : c.values if endswith(c.variable, ":sub")
+      ]
+      ])) == toset([
+      "repo:acme-corp@71835312/acme-infra@1426300729:pull_request",
+      "repo:acme-corp@71835312/acme-infra@1426300729:ref:refs/heads/main",
+    ])
+    error_message = "El rol de plan debe usar el subject inmutable del repositorio."
+  }
+
+  assert {
+    condition = flatten([
+      for s in data.aws_iam_policy_document.apply_trust.statement : [
+        for c in s.condition : c.values if endswith(c.variable, ":sub")
+      ]
+    ]) == ["repo:acme-corp@71835312/acme-infra@1426300729:environment:prod"]
+    error_message = "El rol de apply debe usar el subject inmutable del repositorio."
+  }
+}
+
+run "rejects_wildcards_in_subject_prefix" {
+  command = plan
+
+  variables {
+    github_subject_prefix = "repo:acme-corp/*"
+  }
+
+  expect_failures = [var.github_subject_prefix]
+}
