@@ -54,6 +54,12 @@ env:
   TF_INPUT: "0"
   TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.plugin-cache
 
+# shell: bash = "bash --noprofile --norc -eo pipefail": sin él GitHub usa "bash -e" y un fallo dentro de una
+# tubería (conftest | tee) no detiene el paso (E2E de la fase 12).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   plan:
     name: plan ${{ inputs.root }}
