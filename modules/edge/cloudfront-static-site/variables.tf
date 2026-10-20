@@ -81,10 +81,17 @@ variable "force_destroy" {
   nullable    = false
 }
 
+variable "spa_routing" {
+  description = "Enrutado de la aplicación de una sola página con una CloudFront Function en el comportamiento por defecto: las rutas sin extensión se sirven con /index.html. No toca los errores (403 del WAF, respuestas de la API)."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "spa_error_codes" {
-  description = "Códigos de error que se sirven como /index.html con 200 (aplicación de una sola página). Lista vacía para desactivarlo. OJO: es una configuración de toda la distribución y enmascara también los 403/404 del origen de API."
+  description = "Códigos de error que se sirven como /index.html con 200 (alternativa antigua a spa_routing). Desaconsejado: es una configuración de toda la distribución y convierte en 200 los bloqueos del WAF y los 403/404 del origen de API. Por defecto ninguno."
   type        = list(number)
-  default     = [403, 404]
+  default     = []
 
   validation {
     condition     = alltrue([for c in var.spa_error_codes : contains([400, 403, 404, 405, 414, 416, 500, 501, 502, 503, 504], c)])

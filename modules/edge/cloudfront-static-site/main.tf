@@ -6,6 +6,18 @@ resource "aws_cloudfront_origin_access_control" "this" {
   signing_protocol                  = "sigv4"
 }
 
+# Enrutado de la SPA en el borde, solo en el comportamiento por defecto (S3): a diferencia de custom_error_response,
+# no reescribe los 403 del WAF ni los errores del origen de API (E2E de la fase 12, 2026-10-19).
+resource "aws_cloudfront_function" "spa_routing" {
+  count = var.spa_routing ? 1 : 0
+
+  name    = "${local.name}-spa-routing"
+  runtime = "cloudfront-js-2.0"
+  comment = "SPA: rutas sin extension -> /index.html"
+  publish = true
+  code    = file("${path.module}/functions/spa-routing.js")
+}
+
 resource "aws_cloudfront_distribution" "this" {
   comment             = "${local.name}: sitio estático"
   enabled             = true
@@ -57,6 +69,15 @@ resource "aws_cloudfront_distribution" "this" {
     compress                   = true
     cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
     response_headers_policy_id = var.response_headers_policy_id
+
+    dynamic "function_association" {
+      for_each = var.spa_routing ? [1] : []
+
+      content {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.spa_routing[0].arn
+      }
+    }
   }
 
   dynamic "ordered_cache_behavior" {

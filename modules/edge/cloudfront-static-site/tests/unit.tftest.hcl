@@ -1,4 +1,7 @@
 mock_provider "aws" {
+  mock_resource "aws_cloudfront_function" {
+    defaults = { arn = "arn:aws:cloudfront::123456789012:function/acme-dev-spa-routing" }
+  }
   mock_data "aws_caller_identity" {
     defaults = {
       account_id = "123456789012"
@@ -136,28 +139,40 @@ run "viewer_tls12_2021_http3" {
   }
 }
 
-run "spa_errors_rewritten_to_index_by_default" {
+run "spa_routing_uses_a_function_and_keeps_errors_by_default" {
   command = plan
 
   assert {
     condition = (
-      toset([for e in aws_cloudfront_distribution.this.custom_error_response : e.error_code]) == toset([403, 404]) &&
-      alltrue([for e in aws_cloudfront_distribution.this.custom_error_response : e.response_code == 200 && e.response_page_path == "/index.html"])
+      length(aws_cloudfront_function.spa_routing) == 1 &&
+      aws_cloudfront_function.spa_routing[0].runtime == "cloudfront-js-2.0" &&
+      length(aws_cloudfront_distribution.this.custom_error_response) == 0 &&
+      length([for f in aws_cloudfront_distribution.this.default_cache_behavior[0].function_association : f if f.event_type == "viewer-request"]) == 1
     )
-    error_message = "403 y 404 se sirven como /index.html con 200 (SPA)."
-  }
-}
-
-run "spa_rewrite_can_be_disabled" {
-  command = plan
-
-  variables {
-    spa_error_codes = []
+    error_message = "El enrutado de la SPA es una función viewer-request del comportamiento por defecto y no reescribe errores (los 403 del WAF y de la API llegan tal cual)."
   }
 
   assert {
-    condition     = length(aws_cloudfront_distribution.this.custom_error_response) == 0
-    error_message = "Con spa_error_codes vacío no se reescriben errores."
+    condition     = alltrue([for b in aws_cloudfront_distribution.this.ordered_cache_behavior : length(b.function_association) == 0])
+    error_message = "La API no pasa por la función de la SPA."
+  }
+}
+
+run "spa_routing_can_be_disabled_and_error_rewrite_is_opt_in" {
+  command = plan
+
+  variables {
+    spa_routing     = false
+    spa_error_codes = [404]
+  }
+
+  assert {
+    condition = (
+      length(aws_cloudfront_function.spa_routing) == 0 &&
+      length(aws_cloudfront_distribution.this.default_cache_behavior[0].function_association) == 0 &&
+      toset([for e in aws_cloudfront_distribution.this.custom_error_response : e.error_code]) == toset([404])
+    )
+    error_message = "Sin spa_routing no hay función; la reescritura de errores solo existe si se pide."
   }
 }
 
