@@ -1,0 +1,86 @@
+# Generado por scripts/new-client.sh (plan, fase 11.2; ADR 0018): no lo edites a mano, regenéralo.
+# Aplica exactamente el plan revisado de cada raíz cambiada, en orden de despliegue: línea base, organización y
+# control plane, capas de cada entorno (dev -> staging -> prod) y tenants silo. Cada raíz espera a la anterior;
+# un fallo detiene las siguientes. Los entornos con revisores (prod...) piden aprobación antes del apply.
+name: apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "live/**"
+      - "modules/**"
+      - "blueprints/**"
+      - "policies/**"
+      - "CATALOG_VERSION"
+      - ".github/live-roots.json"
+      - ".github/workflows/tofu-layer.yml"
+  # Manual: planifica (y aplica con cambios) todas las raíces.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+
+concurrency:
+  group: apply
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      roots: ${{ steps.changes.outputs.roots }}
+      allow_destroy: ${{ steps.label.outputs.allow_destroy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Raíces afectadas
+        id: changes
+        env:
+          BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: scripts/changed-roots.sh "$BEFORE" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      # La etiqueta allow-destroy del PR fusionado también rige su apply (las políticas se evalúan de nuevo aquí).
+      - name: Etiqueta allow-destroy del PR
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          allow=false
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            labels="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at != null) | .labels[].name] | join(" ")')"
+            case " $labels " in *" allow-destroy "*) allow=true ;; esac
+          fi
+          echo "allow_destroy=$allow" >> "$GITHUB_OUTPUT"
+
+  dev-stack:
+    needs: [changes]
+    if: ${{ !cancelled() && !failure() && contains(fromJSON(needs.changes.outputs.roots), 'dev/stack') }}
+    uses: ./.github/workflows/tofu-layer.yml
+    with:
+      root: dev/stack
+      mode: apply
+      region: us-east-1
+      plan_role_arn: arn:aws:iam::654654616677:role/gha-plan-dev
+      apply_role_arn: arn:aws:iam::654654616677:role/gha-apply-dev
+      github_environment: dev
+      allow_destroy: ${{ needs.changes.outputs.allow_destroy == 'true' }}
+
+  staging-stack:
+    needs: [changes, dev-stack]
+    if: ${{ !cancelled() && !failure() && contains(fromJSON(needs.changes.outputs.roots), 'staging/stack') }}
+    uses: ./.github/workflows/tofu-layer.yml
+    with:
+      root: staging/stack
+      mode: apply
+      region: us-east-1
+      plan_role_arn: arn:aws:iam::654654616677:role/gha-plan-staging
+      apply_role_arn: arn:aws:iam::654654616677:role/gha-apply-staging
+      github_environment: staging
+      allow_destroy: ${{ needs.changes.outputs.allow_destroy == 'true' }}

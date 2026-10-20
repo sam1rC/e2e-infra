@@ -1,0 +1,92 @@
+# Actualización del catálogo vendorizado (plan, fase 11.4; ADR 0005 y 0018): ejecuta el vendor.sh de la versión
+# pedida, regenera los lock files y abre un PR con el CHANGELOG. El cliente decide cuándo hacer merge; el plan del
+# PR (con conftest) muestra el impacto en cada raíz.
+#
+# Configuración: variable de repositorio CATALOG_REPOSITORY (owner/repo del catálogo) y secreto CATALOG_READ_TOKEN
+# (token de solo lectura del catálogo; no hace falta si el catálogo es público). Los PR creados con GITHUB_TOKEN no disparan plan.yml: define el secreto
+# CATALOG_UPDATE_TOKEN (GitHub App o token fine-grained con contents y pull-requests de escritura) para que sí lo hagan.
+name: catalog-update
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Versión del catálogo (X.Y.Z, tag vX.Y.Z).
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: catalog-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.plugin-cache
+    steps:
+      - name: Versión válida
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version debe ser X.Y.Z"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.CATALOG_UPDATE_TOKEN || github.token }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.CATALOG_REPOSITORY }}
+          ref: v${{ inputs.version }}
+          token: ${{ secrets.CATALOG_READ_TOKEN || github.token }}
+          path: .catalog
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Versiones de .tool-versions
+        id: versions
+        run: awk 'NF == 2 { gsub("-", "_", $1); print $1 "=" $2 }' .catalog/.tool-versions >> "$GITHUB_OUTPUT"
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ steps.versions.outputs.opentofu }}
+          tofu_wrapper: false
+
+      - name: Vendorizar
+        run: |
+          previous="$(cat CATALOG_VERSION 2>/dev/null || echo ninguna)"
+          echo "PREVIOUS=$previous" >> "$GITHUB_ENV"
+          .catalog/scripts/vendor.sh "$GITHUB_WORKSPACE" "$VERSION"
+          # Notas de la versión (sección del CHANGELOG del catálogo).
+          awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {p = 1; next} p && /^## \[/ {exit} p' .catalog/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          rm -rf .catalog .plugin-cache
+
+      - name: PR
+        env:
+          GH_TOKEN: ${{ secrets.CATALOG_UPDATE_TOKEN || github.token }}
+        run: |
+          if git diff --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "Sin cambios: el repositorio ya tiene el catálogo $VERSION."; exit 0
+          fi
+          branch="catalog/v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A
+          git commit -m "Catálogo de infraestructura v$VERSION"
+          git push --force-with-lease origin "$branch"
+          {
+            echo "Actualiza el catálogo vendorizado de **$PREVIOUS** a **$VERSION** (\`modules/\`, \`blueprints/\`, \`sql/\`, \`policies/opa/\`, \`docs/runbooks/\`, lock files de \`live/\`)."
+            echo
+            echo "Revisa el plan de cada raíz en este PR: las políticas bloquean cualquier destrucción de recursos con estado salvo la etiqueta \`allow-destroy\`. Las variables nuevas de las capas no se añaden a los \`*.auto.tfvars\`: consulta el README de cada capa."
+            echo
+            echo "## Cambios del catálogo"
+            cat "$RUNNER_TEMP/notes.md"
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" \
+            --title "Catálogo de infraestructura v$VERSION" --body-file "$RUNNER_TEMP/body.md"

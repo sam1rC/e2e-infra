@@ -1,0 +1,48 @@
+# Detección diaria de drift (plan, fase 11.3; ADR 0018): plan -detailed-exitcode de cada raíz de live/; con cambios
+# abre o actualiza el issue "Drift detectado: live/<raíz>" (etiqueta drift) y lo cierra cuando vuelve a coincidir.
+name: drift
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+concurrency:
+  group: drift
+  cancel-in-progress: false
+
+jobs:
+  roots:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.roots.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Todas las raíces
+        id: roots
+        run: scripts/changed-roots.sh "" HEAD --all >> "$GITHUB_OUTPUT"
+
+  drift:
+    needs: roots
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJSON(needs.roots.outputs.matrix) }}
+    uses: ./.github/workflows/tofu-layer.yml
+    with:
+      root: ${{ matrix.root }}
+      mode: drift
+      region: ${{ matrix.region }}
+      plan_role_arn: ${{ matrix.plan_role_arn }}
+      apply_role_arn: ${{ matrix.apply_role_arn }}
+      github_environment: ${{ matrix.github_environment }}

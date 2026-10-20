@@ -1,0 +1,34 @@
+# Cliente de prueba E2E de la fase 12 (cuenta sandbox, todo se destruye al terminar).
+client: e2e
+project: e2e
+blueprint: saas-t3
+region: us-east-1
+dr_region: us-west-2
+size: small
+
+github:
+  org: sam1rC
+  repo: e2e-infra
+  subject_prefix: "repo:sam1rC@71835312/e2e-infra@1426300729"
+  codeowners: ["@sam1rC"]
+
+tags:
+  owner: samir
+  cost_center: catalog-test
+  data_classification: internal
+
+alarm_emails: [samircolpas14@gmail.com]
+
+# La línea base de la cuenta (CloudTrail, GuardDuty, Security Hub...) se prueba aparte (oleada 7).
+accounts:
+  sandbox: { id: "654654616677", baseline: false }
+
+environments:
+  dev:
+    account: sandbox
+    domain_name: dev.e2e.catalog-sandbox.click
+    zone_id: Z0322739RP72CHC4DRCP
+  staging:
+    account: sandbox
+    domain_name: staging.e2e.catalog-sandbox.click
+    zone_id: Z0322739RP72CHC4DRCP

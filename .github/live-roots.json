@@ -1,0 +1,28 @@
+[
+  {
+    "root": "dev/stack",
+    "job": "dev-stack",
+    "kind": "layer",
+    "env": "dev",
+    "layer": "stack",
+    "account": "sandbox",
+    "account_id": "654654616677",
+    "region": "us-east-1",
+    "plan_role_arn": "arn:aws:iam::654654616677:role/gha-plan-dev",
+    "apply_role_arn": "arn:aws:iam::654654616677:role/gha-apply-dev",
+    "github_environment": "dev"
+  },
+  {
+    "root": "staging/stack",
+    "job": "staging-stack",
+    "kind": "layer",
+    "env": "staging",
+    "layer": "stack",
+    "account": "sandbox",
+    "account_id": "654654616677",
+    "region": "us-east-1",
+    "plan_role_arn": "arn:aws:iam::654654616677:role/gha-plan-staging",
+    "apply_role_arn": "arn:aws:iam::654654616677:role/gha-apply-staging",
+    "github_environment": "staging"
+  }
+]

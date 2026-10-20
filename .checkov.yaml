@@ -1,0 +1,53 @@
+framework:
+  - terraform
+directory:
+  - modules
+  - blueprints
+quiet: true
+compact: true
+
+# Gate de "no regresión". checkov OSS no conoce severidades sin API key de Prisma, así que
+# `hard-fail-on: HIGH` no filtraba nada y el job salía siempre con 0. Ahora falla cualquier check que
+# no esté en la lista de excepciones de abajo (ejecutado por primera vez el 2026-10-05: 2278 pasan).
+# Cada excepción lleva su motivo; si un check solo aplica a un recurso concreto, usa mejor
+# `#checkov:skip=ID:motivo` dentro del recurso y no lo añadas aquí.
+skip-check:
+  # --- Decisiones de diseño del catálogo ---
+  - CKV2_AWS_34   # Parámetros SSM sin SecureString: solo guardan IDs, endpoints y ARNs, nunca secretos (ADR 0004).
+  - CKV_AWS_338   # Logs 1 año: el catálogo exige 90 días mínimo en prod y la retención es variable (el cliente sube el valor).
+  - CKV_AWS_144   # Replicación cross-region de S3: el DR de datos lo hace AWS Backup (fase 7.4), no cada bucket.
+  - CKV2_AWS_62   # Notificaciones de eventos en S3: no hay consumidores genéricos; se añaden por blueprint si hacen falta.
+  - CKV_AWS_145   # S3 con KMS: los buckets de logs de ALB/CloudFront/flow logs usan SSE-S3 por limitación del servicio (ADR 0011).
+  - CKV_AWS_252   # SNS en CloudTrail: las alarmas de seguridad salen por EventBridge/Security Hub, no por SNS de CloudTrail.
+  - CKV_AWS_9     # Caducidad de contraseñas IAM <= 90 días: configurable (password_policy.max_age_days) y NIST 800-63B desaconseja la rotación periódica.
+  - CKV_AWS_374   # Restricción geográfica en CloudFront: depende del negocio del cliente; se activa por variable.
+  - CKV_AWS_310   # Origin failover de CloudFront: un único origen por diseño (ALB interno o bucket).
+  - CKV_AWS_305   # Objeto raíz por defecto en la distribución con VPC origin: lo gestiona la aplicación.
+  - CKV2_AWS_32   # Response headers policy: la aporta el módulo edge/security-headers y se pasa por variable.
+  - CKV2_AWS_47   # AMR Log4j en el WAF de CloudFront: el WAF se crea en edge/waf-web-acl (módulo distinto) con KnownBadInputs.
+  - CKV_AWS_86    # Logging estándar de CloudFront: se configura con la entrega v2 (ADR 0011), que checkov no reconoce.
+  - CKV2_AWS_31   # Logging de WAF: lo crea edge/waf-web-acl con aws_wafv2_web_acl_logging_configuration (recurso aparte).
+  - CKV_AWS_91    # Access logs del ALB en ejemplos efímeros: alb-internal los exige en prod.
+  - CKV_AWS_150   # Deletion protection del ALB: activa por defecto en prod (variable por entorno, no resoluble en estático).
+  - CKV2_AWS_3    # GuardDuty "org/región": se habilita por cuenta en account-baseline; la delegación a la organización es de org-guardrails.
+  - CKV2_AWS_38   # DNSSEC en una zona Route 53 de prueba del ejemplo de acm-certificate (no es del módulo).
+  - CKV2_AWS_39   # Logging de consultas DNS en esa misma zona de prueba.
+  - CKV2_AWS_27   # Query logging de Postgres: se auditan DDL/roles con pgaudit y las consultas lentas con log_min_duration_statement; registrar todas es ruidoso y caro.
+  # --- Falsos positivos del análisis estático por módulo o por valores condicionales ---
+  - CKV2_AWS_5    # "SG no asociado": se asocia desde el módulo que lo consume (ALB/ECS/Lambda/endpoints) y en los ejemplos.
+  - CKV2_AWS_50   # Failover de ElastiCache: es condicional (num_cache_clusters >= 2, obligatorio en prod).
+  - CKV2_AWS_57   # Rotación del secreto de ejemplo en ecs-service (el valor lo gestiona la app).
+  - CKV_AWS_304   # Rotación <= 90 días: automatically_after_days es variable (30 por defecto) y la rotación es obligatoria en prod.
+  - CKV2_AWS_8    # AWS Backup para Aurora: se incorpora por la etiqueta BackupPlan en la fase 7.4 (resilience/backup-plan).
+  - CKV_AWS_133   # Backup de RDS: backup_retention_period sale de una variable con mínimo 14 en prod.
+  # --- IAM con comodines legítimos (política de clave KMS y permissions boundary) ---
+  - CKV_AWS_109   # La key policy delega la administración en la raíz de la cuenta (patrón estándar de KMS).
+  - CKV_AWS_111   # Idem: kms:* sobre la propia clave solo para la raíz de la cuenta.
+  - CKV_AWS_356   # Idem: en una key policy el recurso "*" es la propia clave.
+  - CKV_AWS_1     # La permissions boundary del rol de apply de github-oidc acota privilegios; no es una política concedida.
+  - CKV_AWS_49    # Idem (boundary con acciones por servicio).
+  - CKV_AWS_107   # Idem.
+  - CKV_AWS_108   # Idem.
+  - CKV_AWS_110   # Idem.
+  - CKV2_AWS_40   # Idem.
+  - CKV_AWS_274   # AdministratorAccess solo si el cliente lo pasa en apply_policy_arns; limitada por la permissions boundary.
